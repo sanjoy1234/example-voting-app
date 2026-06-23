@@ -1,0 +1,53 @@
+replicaCount: 2
+
+image:
+  repository: us-central1-docker.pkg.dev/scotiapoc-migration-demo/migration-demo/example-voting-app
+  tag: latest
+  pullPolicy: Always
+
+service:
+  type: ClusterIP
+  port: 80
+  targetPort: 80
+
+containerPort: 80
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 128Mi
+  limits:
+    cpu: 500m
+    memory: 256Mi
+
+hpa:
+  minReplicas: 2
+  maxReplicas: 4
+  cpuUtilization: 70
+
+ingress:
+  enabled: true
+  className: nginx
+  host: voting-app.atlas-prod.local
+
+probes:
+  readiness:
+    path: /
+    port: 80
+    initialDelaySeconds: 10
+    periodSeconds: 10
+    failureThreshold: 3
+  liveness:
+    path: /
+    port: 80
+    initialDelaySeconds: 15
+    periodSeconds: 20
+    failureThreshold: 3
+
+terminationGracePeriodSeconds: 60
+
+secretName: vote-secret
+configMapName: vote-config
+
+podMonitor:
+  enabled: true
