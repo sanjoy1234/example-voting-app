@@ -1,0 +1,17 @@
+[
+  {
+    "id": "EP-001",
+    "title": "Secure and Resilient PCF-to-GKE Migration of the Voting Service",
+    "description": "Scotiabank's Platform Engineering team maintains the example-voting-app, a customer-facing web application that enables end users to cast preference votes (Cats vs Dogs) in a controlled experiment environment. The voting service runs on the Cloud Foundry (PCF) platform today and is approaching end-of-platform support, creating an operational risk: Scotiabank's TAS contract renewal is being deferred in favour of full GKE adoption. Without migrating this service, platform engineers face a hard cutover cliff — the service becomes unsupported while still receiving production traffic. The migration is being driven by Scotiabank's Cloud First initiative and must be completed within Wave 2 of the PCF decommission programme.\n\nThis Epic delivers the full migration of the vote service from PCF to GKE. It covers: translation of the CF VCAP_SERVICES Redis binding to a Kubernetes Secret; patching the hardcoded Redis hostname in vote/app.py to consume the injected REDIS_HOST environment variable; modernising the base Docker image from Python 3.11 to Python 3.12-slim with pinned production dependencies; generating a Helm chart with Deployment, Service, Ingress, ConfigMap, HPA, and Secret templates; establishing a GitHub Actions CI/CD workflow that builds, pushes, and deploys on merge to main; and validating the deployment with smoke tests in the atlas-prod namespace.\n\nAll implementations must comply with Scotiabank internal security policy SCB-SEC-015 (container hardening) and perform within the following targets: health endpoint (GET /) must respond within 500ms under 50 concurrent requests; pod startup must reach Ready state within 30 seconds of container launch; gunicorn must maintain throughput of at least 200 requests per second with 4 workers under the 256Mi memory limit. Availability target is 99.9% monthly uptime in the atlas-prod namespace. Redis connection must use no-auth mode matching CF binding (VCAP password is empty string) and must fail safe with a 5-second socket timeout.\n\nIn scope: vote service only (Python/Flask, Gunicorn, Redis queue write). The result service (Node.js) and worker service (.NET) are explicitly out of scope for this Epic — they are covered by separate migration Epics in Wave 3. The Postgres database is also excluded. Redis itself is treated as a shared infrastructure dependency provisioned by the Platform Engineering team via Helm before this service deploys.\n\nThis Epic aligns with Scotiabank's Cloud First Platform Strategy (2024–2026) and the GKE Adoption Programme goal of migrating all Wave 2 apps by Q3 2026. Primary delivery risk: the hardcoded Redis hostname in vote/app.py has never been driven by the REDIS_HOST env var — if the patch is not applied, the service will connect to the wrong Redis host in GKE and silently fail to record votes. Mitigation: the code patch is part of implement_migration Phase 0 and is validated by smoke tests before any PR is merged. Target delivery: Sprint 2026-W26.",
+    "priority": "High",
+    "labels": [
+      "migration",
+      "wave2",
+      "python",
+      "replatform",
+      "scotiabank-cloud-first"
+    ],
+    "jira_key": null,
+    "epic_id": "EP-001"
+  }
+]
