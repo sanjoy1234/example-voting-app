@@ -1,0 +1,76 @@
+name: Deploy example-voting-app to GKE
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'vote/**'
+      - 'output/Dockerfile'
+      - 'output/helm/example-voting-app/**'
+
+env:
+  GCP_PROJECT_ID: scotiapoc-migration-demo
+  GKE_CLUSTER_NAME: scotiapoc-gke
+  GKE_REGION: us-central1
+  ARTIFACT_REGISTRY: us-central1-docker.pkg.dev
+  REGISTRY_REPO: migration-demo
+  IMAGE_NAME: example-voting-app
+  HELM_RELEASE: example-voting-app
+  NAMESPACE: atlas-prod
+
+jobs:
+  build-and-deploy:
+    name: Build, Push, and Deploy
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Authenticate to Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.WIF_PROVIDER }}
+          service_account: ${{ secrets.WIF_SERVICE_ACCOUNT }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker ${{ env.ARTIFACT_REGISTRY }} --quiet
+
+      - name: Set up Docker Buildx (linux/amd64)
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push container image
+        run: |
+          IMAGE="${{ env.ARTIFACT_REGISTRY }}/${{ env.GCP_PROJECT_ID }}/${{ env.REGISTRY_REPO }}/${{ env.IMAGE_NAME }}"
+          docker buildx build \
+            --platform linux/amd64 \
+            --push \
+            -t "${IMAGE}:${{ github.sha }}" \
+            -t "${IMAGE}:latest" \
+            -f output/Dockerfile \
+            vote/
+
+      - name: Get GKE credentials
+        uses: google-github-actions/get-gke-credentials@v2
+        with:
+          cluster_name: ${{ env.GKE_CLUSTER_NAME }}
+          location: ${{ env.GKE_REGION }}
+
+      - name: Deploy via Helm
+        run: |
+          IMAGE="${{ env.ARTIFACT_REGISTRY }}/${{ env.GCP_PROJECT_ID }}/${{ env.REGISTRY_REPO }}/${{ env.IMAGE_NAME }}"
+          helm upgrade --install ${{ env.HELM_RELEASE }} output/helm/example-voting-app \
+            --namespace ${{ env.NAMESPACE }} \
+            --set image.repository="${IMAGE}" \
+            --set image.tag="${{ github.sha }}" \
+            --wait \
+            --timeout=5m
+
+      - name: Verify rollout
+        run: |
+          kubectl rollout status deployment/${{ env.HELM_RELEASE }} \
+            -n ${{ env.NAMESPACE }} --timeout=120s
+          kubectl get pods -n ${{ env.NAMESPACE }} -l app=${{ env.HELM_RELEASE }}

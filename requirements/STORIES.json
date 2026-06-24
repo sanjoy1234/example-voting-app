@@ -1,0 +1,78 @@
+[
+  {
+    "feature_id": "F-001",
+    "epic_id": "EP-001",
+    "title": "Vote Service Container Image Build with Redis Env-Var Injection",
+    "description": "h2. Description\n\nAs a platform engineer responsible for Wave 2 PCF-to-GKE migration, I want the example-voting-app vote service to be built as a linux/amd64 Docker image with the Redis hostname externalized to an environment variable, so that the image can be deployed to any GKE namespace with the correct Redis endpoint injected at runtime without rebuilding the container.\n\nCurrently, vote/app.py hardcodes Redis(host='redis') on line 24, making the container dependent on a specific DNS name rather than a configurable runtime parameter. This means the same image cannot be reused across environments and breaks immediately if the K8s Redis service name differs from 'redis'. This story patches that single line, upgrades the base image from python:3.11-slim to python:3.12-slim, builds the final Dockerfile stage for linux/amd64, and pushes to the Artifact Registry. The patched app.py falls back to 'redis' if REDIS_HOST is not set, ensuring backward compatibility with docker-compose development workflows.\n\nh2. Acceptance Criteria\n\n*Given* the vote service source code is cloned from the operator fork of dockersamples/example-voting-app,\n*When* the build pipeline patches vote/app.py to replace Redis(host='redis') with Redis(host=os.getenv('REDIS_HOST', 'redis')),\n*Then* the patched file must contain exactly one reference to os.getenv('REDIS_HOST') and zero references to the literal string Redis(host='redis').\n\n*Given* the patched app.py is present and GCP credentials are active,\n*When* docker buildx build --platform linux/amd64 --push -t <registry>/example-voting-app:latest ./vote --target final is executed,\n*Then* the command shall exit 0 within 10 minutes and docker manifest inspect <registry>/example-voting-app:latest shall return a manifest with platform.os=linux and platform.architecture=amd64.\n\n*Given* the image has been pushed to Artifact Registry,\n*When* the base image layer is inspected via docker image history or the OCI manifest,\n*Then* the base image shall be python:3.12-slim and no layer shall contain python:3.11.\n\n*Given* the image build is initiated without a prior successful pip-audit run,\n*When* pip-audit -r vote/requirements.txt is executed against Flask, Redis, and gunicorn,\n*Then* the build pipeline shall halt and emit a clear error if pip-audit reports any finding with severity HIGH or CRITICAL; the build proceeds only after zero HIGH/CRITICAL findings are confirmed.\n\n*Given* a developer runs the built container locally with docker run -e REDIS_HOST=localhost -p 8080:80 <image>,\n*When* a GET request is made to http://localhost:8080/,\n*Then* the Flask app shall return HTTP 200 and the HTML response shall contain 'option_a' and 'option_b' text nodes confirming the template rendered correctly without a Redis connection error crash.",
+    "acceptance_criteria": [
+      "Given vote/app.py is patched, When docker buildx build --platform linux/amd64 --push executes, Then exit 0 within 10 min and manifest shows amd64.",
+      "Given patched source, When grep Redis(host= vote/app.py, Then zero matches for hardcoded 'redis' string; exactly one os.getenv('REDIS_HOST') reference.",
+      "Given image built and pushed, When docker manifest inspect <image>, Then platform.architecture=amd64 and platform.os=linux confirmed.",
+      "Given pip-audit runs on requirements.txt, When Flask/Redis/gunicorn scanned, Then zero HIGH/CRITICAL CVEs or build halts with explicit CVE list.",
+      "Given container started with REDIS_HOST=localhost, When GET / called, Then HTTP 200 returned and HTML contains vote options without crash."
+    ],
+    "story_points": 3,
+    "labels": [
+      "story",
+      "container",
+      "python"
+    ],
+    "jira_key": null,
+    "story_id": "ST-001",
+    "requirement_id": "REQ-001",
+    "planned_test_case_ids": [
+      "TC-001"
+    ]
+  },
+  {
+    "feature_id": "F-002",
+    "epic_id": "EP-001",
+    "title": "Kubernetes Secret and ConfigMap Provisioning for Vote Service Runtime",
+    "description": "h2. Description\n\nAs a platform engineer deploying the vote service to the atlas-prod GKE namespace, I want Kubernetes Secret and ConfigMap resources to be created with the correct Redis connection details and non-sensitive environment variables, so that the vote service pods can connect to the bitnami Redis instance without any plaintext credentials appearing in the Deployment manifest or pod spec.\n\nCurrently, the CF manifest supplies REDIS_HOST via a VCAP_SERVICES binding (redis.service.cf.internal:6379), and the vote app reads it from the CF environment at runtime. In GKE, this binding mechanism does not exist. The replacement is a Kubernetes Secret (vote-secret) holding REDIS_HOST=redis-headless.atlas-prod.svc.cluster.local and a ConfigMap (vote-config) holding OPTION_A, OPTION_B, FLASK_ENV, and REDIS_PORT. The vote Deployment mounts both, and the pod spec never contains raw credential values. This story provisions both resources and validates they are correctly bound by running a pod environment variable inspection.\n\nh2. Acceptance Criteria\n\n*Given* kubectl is authenticated to the atlas-prod namespace and the vote-secret does not yet exist,\n*When* kubectl create secret generic vote-secret -n atlas-prod --from-literal=REDIS_HOST=redis-headless.atlas-prod.svc.cluster.local is executed,\n*Then* kubectl get secret vote-secret -n atlas-prod -o jsonpath='{.data.REDIS_HOST}' shall return a base64-encoded value that decodes to redis-headless.atlas-prod.svc.cluster.local.\n\n*Given* the vote-secret exists in atlas-prod,\n*When* kubectl get secret vote-secret -n atlas-prod -o json is retrieved and inspected,\n*Then* the response shall contain no plaintext credentials in .data fields \u2014 all values shall be base64-encoded strings, and the type shall be Opaque.\n\n*Given* vote-config ConfigMap is created with OPTION_A=Cats, OPTION_B=Dogs, FLASK_ENV=production, REDIS_PORT=6379,\n*When* kubectl get configmap vote-config -n atlas-prod -o jsonpath='{.data}' is retrieved,\n*Then* all four keys shall be present with expected values and no REDIS_HOST key shall appear (sensitive key is Secret-only).\n\n*Given* the Secret and ConfigMap exist and a test pod is launched in atlas-prod that mounts both,\n*When* kubectl exec <test-pod> -- env | grep -E 'REDIS|OPTION|FLASK' is run,\n*Then* the output shall contain REDIS_HOST=redis-headless.atlas-prod.svc.cluster.local, OPTION_A=Cats, OPTION_B=Dogs, FLASK_ENV=production, and REDIS_PORT=6379 confirming all environment variables are correctly injected.\n\n*Given* the atlas-prod namespace already has a Redis StatefulSet from Wave 1 (bitnami/redis),\n*When* kubectl get svc -n atlas-prod -l app.kubernetes.io/name=redis is run,\n*Then* the redis-headless service shall be listed with ClusterIP=None (headless) confirming the REDIS_HOST value resolves to a valid in-cluster endpoint.",
+    "acceptance_criteria": [
+      "Given vote-secret created, When kubectl get secret vote-secret -n atlas-prod decoded, Then REDIS_HOST=redis-headless.atlas-prod.svc.cluster.local.",
+      "Given vote-secret retrieved as JSON, When .data fields inspected, Then all values are base64 and no plaintext credentials visible.",
+      "Given vote-config created, When kubectl get configmap vote-config -n atlas-prod, Then OPTION_A, OPTION_B, FLASK_ENV, REDIS_PORT all present; no REDIS_HOST key.",
+      "Given test pod mounts Secret+ConfigMap, When env inspected, Then all 5 env vars present with correct values.",
+      "Given Wave 1 redis in atlas-prod, When kubectl get svc redis-headless -n atlas-prod, Then service exists with ClusterIP=None confirming REDIS_HOST resolves."
+    ],
+    "story_points": 2,
+    "labels": [
+      "story",
+      "k8s",
+      "secrets"
+    ],
+    "jira_key": null,
+    "story_id": "ST-002",
+    "requirement_id": "REQ-002",
+    "planned_test_case_ids": [
+      "TC-002"
+    ]
+  },
+  {
+    "feature_id": "F-002",
+    "epic_id": "EP-001",
+    "title": "Helm Chart Generation and Vote Service Deployment to atlas-prod",
+    "description": "h2. Description\n\nAs a release engineer executing the Wave 2 PCF-to-GKE migration, I want a self-contained Helm chart for the vote service deployed to the atlas-prod namespace with HPA, Ingress, and health probe configuration, so that the service is reachable via the nginx Ingress controller, scales automatically under load, and can be rolled back in under 2 minutes if a defect is discovered post-deploy.\n\nCurrently, the vote service has no Helm chart \u2014 only raw CF manifest and reference k8s-specifications files exist. This story generates the full Helm chart (Chart.yaml, values.yaml, and 6 template files), runs helm upgrade --install, and validates the deployment is healthy with 2/2 pods Ready. The containerPort is 80 (not 3000 \u2014 this is Python/Flask, not Node.js). The Ingress replaces the CF route voting-app.apps.internal.scotiabank.com with voting-app.atlas-prod.local. The HPA ensures the service scales to 4 replicas when CPU exceeds 70%.\n\nh2. Acceptance Criteria\n\n*Given* the Helm chart is generated at output/helm/example-voting-app/ with Chart.yaml, values.yaml, and templates/ directory,\n*When* helm template example-voting-app ./output/helm/example-voting-app/ is run,\n*Then* the rendered output shall contain a Deployment with containerPort 80, a Service with port 80, an HPA with minReplicas: 2 and maxReplicas: 4, an Ingress with host voting-app.atlas-prod.local, and a PodMonitor resource.\n\n*Given* the Helm chart is templated correctly and the image is in Artifact Registry,\n*When* helm upgrade --install example-voting-app ./output/helm/example-voting-app/ -n atlas-prod --wait --timeout=5m is executed,\n*Then* the command shall exit 0 and kubectl get pods -n atlas-prod -l app=example-voting-app shall show 2/2 pods in Running status with READY=1/1 each.\n\n*Given* 2/2 pods are Running in atlas-prod,\n*When* kubectl exec -n atlas-prod <pod> -- curl -sf http://localhost:80/ is run,\n*Then* the response shall be HTTP 200 and the HTML body shall contain 'Cats' and 'Dogs' (the OPTION_A and OPTION_B values from the ConfigMap).\n\n*Given* the pods are Running and the Ingress resource is created,\n*When* kubectl get ingress -n atlas-prod example-voting-app is queried every 5 seconds for up to 120 seconds,\n*Then* the ADDRESS field shall be populated with a non-empty IP address or hostname before the 120-second timeout expires.\n\n*Given* the vote service is deployed with replicaCount: 2,\n*When* kubectl get pods -n atlas-prod -l app=example-voting-app and kubectl get pod <pod> -n atlas-prod -o jsonpath='{.status.containerStatuses[0].restartCount}' are run,\n*Then* exactly 2 pods shall be listed and each pod's restart count shall be 0, confirming stable startup with no CrashLoopBackOff.",
+    "acceptance_criteria": [
+      "Given Helm chart generated, When helm template run, Then Deployment port 80, Service port 80, HPA min:2 max:4, Ingress host voting-app.atlas-prod.local all present.",
+      "Given helm upgrade --install runs, When complete, Then exit 0 and 2/2 pods Running in atlas-prod with READY=1/1.",
+      "Given pods Running, When curl localhost:80/ from pod, Then HTTP 200 with Cats and Dogs in HTML response.",
+      "Given Ingress created, When polled for 120s, Then ADDRESS field populated with non-empty IP or hostname.",
+      "Given 2 pods deployed, When restart count checked, Then each pod shows 0 restarts \u2014 no CrashLoopBackOff."
+    ],
+    "story_points": 5,
+    "labels": [
+      "story",
+      "helm",
+      "gke",
+      "deploy"
+    ],
+    "jira_key": null,
+    "story_id": "ST-003",
+    "requirement_id": "REQ-003",
+    "planned_test_case_ids": [
+      "TC-003"
+    ]
+  }
+]
